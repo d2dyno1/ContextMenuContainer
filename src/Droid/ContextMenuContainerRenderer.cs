@@ -244,6 +244,13 @@ internal sealed class ContextMenuContainerRenderer : ContentViewHandler
 
             _contextMenu = new PopupMenu(Context, child);
             _contextMenu.MenuItemClick += ContextMenu_MenuItemClick;
+            
+            // Enable group dividers for separators (API 28+)
+            if (Android.OS.Build.VERSION.SdkInt >= Android.OS.BuildVersionCodes.P)
+            {
+                _contextMenu.Menu.SetGroupDividerEnabled(true);
+            }
+    
             Field field = _contextMenu.Class.GetDeclaredField("mPopup");
             field.Accessible = true;
             Java.Lang.Object? menuPopupHelper = field.Get(_contextMenu);
@@ -275,10 +282,9 @@ internal sealed class ContextMenuContainerRenderer : ContentViewHandler
             switch (item)
             {
                 // Separator Items
-                case ContextMenuSeparator separatorItem:
+                case ContextMenuSeparator:
                 {
-                    // Android doesn't have native separators in context menus,
-                    // but we can create a disabled item with a separator character or empty text
+                    // For API < 28, create a disabled item as a visual separator
                     var separator = _contextMenu.Menu.Add("────────");
                     separator?.SetEnabled(false);
                     break;
@@ -339,9 +345,82 @@ internal sealed class ContextMenuContainerRenderer : ContentViewHandler
             // ReSharper disable once RedundantTypeCheckInPattern
             if (Element is ContextMenuContainer {MenuItems.Count: > 0} element)
             {
-                foreach (var item in element.MenuItems)
+                if (Android.OS.Build.VERSION.SdkInt >= Android.OS.BuildVersionCodes.P)
                 {
-                    AddMenuItem(item);
+                    // Use group-based separators for API 28+
+                    int currentGroupId = 0;
+            
+                    foreach (var item in element.MenuItems)
+                    {
+                        if (item is ContextMenuSeparator)
+                        {
+                            // Move to next group - this creates the visual separator
+                            currentGroupId++;
+                        }
+                        else if (item is ContextMenuItem contextItem)
+                        {
+                            AddMenuItemToGroup(contextItem, currentGroupId);
+                        }
+                    }
+                }
+                else
+                {
+                    // Fallback for API < 28
+                    foreach (var item in element.MenuItems)
+                    {
+                        AddMenuItem(item);
+                    }
+                }
+            }
+        }
+        
+        private void AddMenuItemToGroup(ContextMenuItem contextItem, int groupId)
+        {
+            if (_contextMenu is null)
+            {
+                return;
+            }
+
+            if (string.IsNullOrEmpty(contextItem.Text))
+            {
+                Logger.Error("ContextMenuItem text should not be empty!");
+                return;
+            }
+
+            var title = new SpannableString(contextItem.Text);
+            if (contextItem.IsDestructive)
+            {
+                title.SetSpan(new ForegroundColorSpan(AColor.Red), 0, title.Length(), 0);
+            }
+
+            // Add item to specific group
+            var contextAction = _contextMenu.Menu.Add(groupId, Menu.None, Menu.None, title);
+            if (contextAction is null)
+            {
+                Logger.Error("We couldn't create IMenuItem with title {0}", contextItem.Text);
+                return;
+            }
+
+            contextAction.SetEnabled(contextItem.IsEnabled);
+            if (contextItem.Icon != null && !string.IsNullOrWhiteSpace(contextItem.Icon.File))
+            {
+                string name = Path.GetFileNameWithoutExtension(contextItem.Icon.File);
+                int id = Context?.GetDrawableId(name) ?? 0;
+                if (id == 0)
+                {
+                    return;
+                }
+
+                var drawable = Context?.GetDrawable(id);
+                if (drawable is not null)
+                {
+                    var wrapper = new DrawableWrapperX(drawable, 0);
+                    if (contextItem.IsDestructive)
+                    {
+                        wrapper.SetTint(AColor.Red);
+                    }
+
+                    contextAction.SetIcon(wrapper);
                 }
             }
         }
